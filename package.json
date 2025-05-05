@@ -2,7 +2,7 @@
   "name": "function-main",
   "version": "1.0.0",
   "main": "index.js",
-  "private": true,
+  "private": false,
   "dependencies": {
     "baileys-elite": "latest"
   }
