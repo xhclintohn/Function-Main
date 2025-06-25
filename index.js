@@ -1,6 +1,7 @@
 import express from "express";
 import rateLimit from "express-rate-limit";
 import pg from "pg";
+import cors from "cors";
 import { startBot, stopBot } from "./bot.js";
 import { saveUserDetails, getAllUsers, deleteUser, deleteAllUsers, cleanupOldBots } from "./utils.js";
 
@@ -10,6 +11,9 @@ const MAX_BOTS = 50;
 
 // Enable proxy for Heroku
 app.set("trust proxy", 1);
+
+// Enable CORS
+app.use(cors({ origin: "*" })); // Allow all origins for testing; restrict to Netlify domain in production
 
 // Find Postgres URL dynamically
 const postgresKey = Object.keys(process.env).find(
