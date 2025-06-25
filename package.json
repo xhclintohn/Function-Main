@@ -1,5 +1,5 @@
 {
-  "name": "bot-backend",
+  "name": "toxic-bot-backend",
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
@@ -7,7 +7,8 @@
     "express": "^4.18.2",
     "pino": "^8.15.0",
     "node-cache": "^5.1.2",
-    "express-rate-limit": "^7.1.0"
+    "express-rate-limit": "^7.1.0",
+    "pg": "^8.11.3"
   },
   "scripts": {
     "start": "node index.js"
