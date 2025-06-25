@@ -1,8 +1,8 @@
 import express from "express";
 import rateLimit from "express-rate-limit";
+import pg from "pg";
 import { startBot, stopBot } from "./bot.js";
 import { saveUserDetails, getAllUsers, deleteUser, deleteAllUsers, cleanupOldBots } from "./utils.js";
-import pg from "pg";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -20,15 +20,20 @@ app.use("/api/connect", rateLimit({ windowMs: 15 * 60 * 1000, max: 5 })); // 5 r
 
 // Initialize Postgres table
 async function initDb() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      botName TEXT PRIMARY KEY,
-      ownerNumber TEXT NOT NULL,
-      sessionId TEXT NOT NULL,
-      status TEXT NOT NULL,
-      connectedAt TIMESTAMP NOT NULL
-    );
-  `);
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        botName TEXT PRIMARY KEY,
+        ownerNumber TEXT NOT NULL,
+        sessionId TEXT NOT NULL,
+        status TEXT NOT NULL,
+        connectedAt TIMESTAMP NOT NULL
+      );
+    `);
+    console.log("Database initialized");
+  } catch (error) {
+    console.error("Database initialization failed:", error);
+  }
 }
 initDb();
 
@@ -57,7 +62,7 @@ app.post("/api/connect", async (req, res) => {
 
   await saveUserDetails(pool, botName, ownerNumber, sessionId, "connecting");
   try {
-    await startBot(botName, ownerNumber, sessionId);
+    await startBot(pool, botName, ownerNumber, sessionId);
     res.json({ message: `Bot ${botName} is being connected` });
   } catch (error) {
     await deleteUser(pool, botName);
