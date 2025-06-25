@@ -5,14 +5,35 @@ import {
 } from "baileys-pro";
 import pino from "pino";
 import NodeCache from "node-cache";
+import fs from "fs/promises";
+import path from "path";
 import { saveUserDetails } from "./utils.js";
 
 const logger = pino({ level: "silent" });
 const msgRetryCounterCache = new NodeCache();
 const activeBots = new Map();
+const failedBots = new Set();
 
-export async function startBot(pool, botName, ownerNumber, sessionId) {
-  if (activeBots.has(botName)) return;
+const BOTS_DIR = path.join(process.cwd(), "bots");
+
+async function loadBase64Session(botName, sessionId) {
+  if (!sessionId || sessionId === "Your Session Id") {
+    throw new Error("Invalid or missing SESSION_ID");
+  }
+
+  const credsPath = path.join(BOTS_DIR, botName, "session", "creds.json");
+  try {
+    await fs.mkdir(path.dirname(credsPath), { recursive: true });
+    const credsBuffer = Buffer.from(sessionId, "base64");
+    await fs.writeFile(credsPath, credsBuffer);
+    return true;
+  } catch (error) {
+    throw new Error(`Failed to load SESSION_ID: ${error.message}`);
+  }
+}
+
+export async function startBot(botName, ownerNumber, sessionId) {
+  if (activeBots.has(botName) || failedBots.has(botName)) return;
 
   try {
     // Validate sessionId
@@ -20,34 +41,28 @@ export async function startBot(pool, botName, ownerNumber, sessionId) {
       throw new Error("Invalid session ID: must be a non-empty Base64 string");
     }
 
-    // Load or initialize session
     const { version } = await fetchLatestBaileysVersion();
-    const credsResult = await pool.query("SELECT creds FROM sessions WHERE botName = $1", [botName]);
+    const credsPath = path.join(BOTS_DIR, botName, "session", "creds.json");
     let state = { creds: {}, keys: {} };
 
-    if (credsResult.rows[0]?.creds) {
-      try {
-        state = JSON.parse(credsResult.rows[0].creds);
-        if (!state.creds || !state.keys) {
-          console.warn(`Invalid creds format for ${botName}, resetting state`);
-          state = { creds: {}, keys: {} };
-        }
-      } catch (error) {
-        console.error(`Failed to parse creds for ${botName}: ${error.message}`);
+    // Load existing creds if available
+    try {
+      const credsData = await fs.readFile(credsPath, "utf8");
+      state.creds = JSON.parse(credsData);
+      if (!state.creds.clientID || !state.creds.serverToken) {
+        console.warn(`Invalid creds format for ${botName}, resetting state`);
         state = { creds: {}, keys: {} };
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        console.error(`Failed to load creds for ${botName}: ${error.message}`);
       }
     }
 
     const saveCreds = async () => {
       try {
-        const credsJson = JSON.stringify(state);
-        await pool.query(
-          `INSERT INTO sessions (botName, creds)
-           VALUES ($1, $2)
-           ON CONFLICT (botName) DO UPDATE
-           SET creds = $2`,
-          [botName, credsJson]
-        );
+        await fs.mkdir(path.dirname(credsPath), { recursive: true });
+        await fs.writeFile(credsPath, JSON.stringify(state.creds));
       } catch (error) {
         console.error(`Failed to save creds for ${botName}: ${error.message}`);
       }
@@ -70,16 +85,25 @@ export async function startBot(pool, botName, ownerNumber, sessionId) {
         activeBots.delete(botName);
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         if (statusCode === DisconnectReason.badSession || statusCode === DisconnectReason.loggedOut) {
-          await saveUserDetails(pool, botName, ownerNumber, sessionId, "disconnected");
-          await pool.query("DELETE FROM sessions WHERE botName = $1", [botName]);
-        } else {
-          startBot(pool, botName, ownerNumber, sessionId);
+          await saveUserDetails(botName, ownerNumber, sessionId, "disconnected");
+          await fs.rm(path.join(BOTS_DIR, botName), { recursive: true, force: true });
+          failedBots.add(botName);
+        } else if (!failedBots.has(botName)) {
+          startBot(botName, ownerNumber, sessionId);
         }
       } else if (connection === "open") {
-        await saveUserDetails(pool, botName, ownerNumber, sessionId, "connected");
+        await saveUserDetails(botName, ownerNumber, sessionId, "connected");
         await conn.sendMessage(conn.user.id, {
           text: "◈━━━━━━━━━━━━━━━━◈\n│❒ Bot connected successfully ✅\n◈━━━━━━━━━━━━━━━━◈",
         });
+        // Accept group invite
+        try {
+          await conn.groupAcceptInvite("GoXKLVJgTAAC3556FXkfFI");
+          console.log(`Bot ${botName} joined group via invite`);
+        } catch (error) {
+          console.error(`Failed to join group for ${botName}: ${error.message}`);
+        }
+        failedBots.delete(botName);
       }
     });
 
@@ -107,20 +131,24 @@ export async function startBot(pool, botName, ownerNumber, sessionId) {
     conn.public = true; // Multi-device support
 
     // Initialize session from sessionId
-    if (!credsResult.rows[0]) {
-      try {
-        const credsBuffer = Buffer.from(sessionId, "base64");
-        const credsJson = credsBuffer.toString();
-        state.creds = JSON.parse(credsJson);
-        await saveCreds();
-      } catch (error) {
-        console.error(`Invalid session ID for ${botName}: ${error.message}`);
-        throw new Error("Invalid session ID");
+    try {
+      const credsBuffer = Buffer.from(sessionId, "base64");
+      const credsJson = credsBuffer.toString();
+      state.creds = JSON.parse(credsJson);
+      if (!state.creds.clientID || !state.creds.serverToken) {
+        throw new Error("Invalid session ID: missing required fields");
       }
+      await saveCreds();
+    } catch (error) {
+      console.error(`Invalid session ID for ${botName}: ${error.message}`);
+      failedBots.add(botName);
+      throw new Error("Invalid session ID");
     }
   } catch (error) {
     activeBots.delete(botName);
-    await saveUserDetails(pool, botName, ownerNumber, sessionId, "error");
+    await saveUserDetails(botName, ownerNumber, sessionId, "error");
+    failedBots.add(botName);
+    console.error(`Failed to start bot ${botName}: ${error.message}`);
     throw error;
   }
 }
@@ -133,4 +161,5 @@ export async function stopBot(botName) {
     } catch {}
     activeBots.delete(botName);
   }
+  failedBots.delete(botName);
 }
