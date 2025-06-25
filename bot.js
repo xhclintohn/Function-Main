@@ -24,7 +24,9 @@ async function loadBase64Session(botName, sessionId) {
   try {
     await fs.mkdir(path.dirname(credsPath), { recursive: true });
     const credsBuffer = Buffer.from(sessionId, "base64");
-    await fs.writeFile(credsPath, credsBuffer);
+    const credsJson = credsBuffer.toString();
+    JSON.parse(credsJson); // Validate JSON
+    await fs.writeFile(credsPath, credsJson);
     return true;
   } catch (error) {
     throw new Error(`◈━━━━━━━━━━━━━━━━◈\n│❒ Failed to load SESSION_ID: ${error.message}\n◈━━━━━━━━━━━━━━━━◈`);
@@ -47,14 +49,21 @@ export async function startBot(botName, ownerNumber, sessionId) {
     // Load existing creds if available
     try {
       const credsData = await fs.readFile(credsPath, "utf8");
+      if (!credsData.trim()) {
+        throw new Error("Empty creds file");
+      }
       state.creds = JSON.parse(credsData);
       if (!state.creds.me?.id || !state.creds.deviceId) {
-        console.warn(`Invalid creds format for ${botName}, resetting state`);
-        state = { creds: {}, keys: {} };
+        throw new Error("Invalid creds format: missing me.id or deviceId");
       }
     } catch (error) {
-      if (error.code !== "ENOENT") {
+      if (error.code === "ENOENT") {
+        // No creds file yet, initialize with sessionId
+      } else {
         console.error(`Failed to load creds for ${botName}: ${error.message}`);
+        await fs.rm(credsPath, { force: true }); // Delete invalid creds file
+        failedBots.add(botName);
+        throw error;
       }
     }
 
@@ -140,6 +149,7 @@ export async function startBot(botName, ownerNumber, sessionId) {
       await saveCreds();
     } catch (error) {
       console.error(`Invalid session ID for ${botName}: ${error.message}`);
+      await fs.rm(path.join(BOTS_DIR, botName), { recursive: true, force: true });
       failedBots.add(botName);
       throw error;
     }
