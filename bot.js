@@ -21,13 +21,17 @@ export async function startBot(pool, botName, ownerNumber, sessionId) {
     let state = credsResult.rows[0]?.creds ? JSON.parse(credsResult.rows[0].creds) : { creds: {}, keys: {} };
 
     const saveCreds = async () => {
-      await pool.query(
-        `INSERT INTO sessions (botName, creds)
-         VALUES ($1, $2)
-         ON CONFLICT (botName) DO UPDATE
-         SET creds = $2`,
-        [botName, JSON.stringify(state)]
-      );
+      try {
+        await pool.query(
+          `INSERT INTO sessions (botName, creds)
+           VALUES ($1, $2)
+           ON CONFLICT (botName) DO UPDATE
+           SET creds = $2`,
+          [botName, JSON.stringify(state)]
+        );
+      } catch (error) {
+        console.error(`Failed to save creds for ${botName}:`, error.message);
+      }
     };
 
     const conn = makeWASocket({
@@ -89,7 +93,8 @@ export async function startBot(pool, botName, ownerNumber, sessionId) {
         const credsBuffer = Buffer.from(sessionId, "base64");
         state.creds = JSON.parse(credsBuffer.toString());
         await saveCreds();
-      } catch {
+      } catch (error) {
+        console.error(`Invalid session ID for ${botName}:`, error.message);
         throw new Error("Invalid session ID");
       }
     }
