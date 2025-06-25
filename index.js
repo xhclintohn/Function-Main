@@ -16,7 +16,7 @@ const postgresUrl =
   process.env.DATABASE_URL ||
   Object.keys(process.env)
     .find((key) => key.startsWith("HEROKU_POSTGRESQL_") && key.endsWith("_URL"))
-    ?.map(key => process.env[key])[0];
+    ?.map((key) => process.env[key])[0];
 if (!postgresUrl) {
   console.error("No PostgreSQL URL found in environment variables!");
   process.exit(1);
@@ -43,14 +43,14 @@ async function initDb() {
         botName TEXT PRIMARY KEY,
         ownerNumber TEXT NOT NULL,
         sessionId TEXT NOT NULL,
-        status TEXT,
+        status TEXT NOT NULL,
         connectedAt TIMESTAMP NOT NULL
       );
     `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS sessions (
         botName TEXT PRIMARY KEY,
-        creds TEXT NOT NULL
+        creds JSONB NOT NULL
       );
     `);
     console.log("PostgreSQL initialized successfully");
@@ -71,13 +71,13 @@ app.post("/api/connect", async (req, res) => {
     return res.status(400).json({ error: "Missing required fields" });
   }
   if (!ownerNumber.match(/^\+\d{10,15}$/)) {
-    return res.status(400).json({ error: "Invalid owner number format (e.g., +255735342912)" });
+    return res.status(400).json({ error: "Invalid owner number format (e.g., +254735342808)" });
   }
 
   try {
     const existing = await pool.query("SELECT botName FROM users WHERE botName = $1", [botName]);
     if (existing.rows.length > 0) {
-      return res.status(400).json({ error: "Bot name already exists" });
+      return res.status(400).json({ error: "Bot name already in use" });
     }
 
     const users = await getAllUsers(pool);
@@ -113,7 +113,7 @@ app.post("/api/delete", async (req, res) => {
     await deleteUser(pool, botName);
     res.json({ message: `Bot ${botName} deleted` });
   } catch (error) {
-    res.status(500).json({ error: Failed to delete bot" });
+    res.status(500).json({ error: "Failed to delete bot" });
   }
 });
 
