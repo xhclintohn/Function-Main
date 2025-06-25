@@ -38,8 +38,8 @@ app.post("/api/connect", async (req, res) => {
     const credsBuffer = Buffer.from(sessionId, "base64");
     const credsJson = credsBuffer.toString();
     const creds = JSON.parse(credsJson);
-    if (!creds.clientID || !creds.serverToken) {
-      return res.status(400).json({ error: "Invalid session ID: missing required fields" });
+    if (!creds.me?.id || !creds.deviceId) {
+      return res.status(400).json({ error: "Invalid session ID: missing required fields (me.id, deviceId)" });
     }
   } catch (error) {
     return res.status(400).json({ error: "Invalid session ID: must be valid Base64-encoded JSON" });
