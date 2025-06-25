@@ -2,39 +2,39 @@ import {
   makeWASocket,
   fetchLatestBaileysVersion,
   DisconnectReason,
-  useMultiFileAuthState,
 } from "baileys-pro";
 import pino from "pino";
 import NodeCache from "node-cache";
-import fs from "fs/promises";
-import path from "path";
-import { fileURLToPath } from "url";
 import { saveUserDetails } from "./utils.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const sessionDir = path.join(__dirname, "session");
 const logger = pino({ level: "silent" });
 const msgRetryCounterCache = new NodeCache();
 const activeBots = new Map();
 
-await fs.mkdir(sessionDir, { recursive: true });
-
-export async function startBot(botName, ownerNumber, sessionId) {
+export async function startBot(pool, botName, ownerNumber, sessionId) {
   if (activeBots.has(botName)) return;
 
   try {
-    if (!(await loadBase64Session(sessionId, botName))) {
-      throw new Error("Invalid session ID");
-    }
-
-    const { state, saveCreds } = await useMultiFileAuthState(path.join(sessionDir, `session_${botName}`));
+    // Load or initialize session
     const { version } = await fetchLatestBaileysVersion();
+    const credsResult = await pool.query("SELECT creds FROM sessions WHERE botName = $1", [botName]);
+    let state = credsResult.rows[0]?.creds ? JSON.parse(credsResult.rows[0].creds) : { creds: {}, keys: {} };
+
+    const saveCreds = async () => {
+      await pool.query(
+        `INSERT INTO sessions (botName, creds)
+         VALUES ($1, $2)
+         ON CONFLICT (botName) DO UPDATE
+         SET creds = $2`,
+        [botName, JSON.stringify(state)]
+      );
+    };
 
     const conn = makeWASocket({
       version,
       logger,
       browser: [botName, "Chrome", "1.0.0"],
-      auth: state,
+      auth: { creds: state.creds, keys: state.keys },
       msgRetryCounterCache,
       getMessage: async (key) => ({ conversation: `${botName} WhatsApp bot` }),
     });
@@ -47,19 +47,24 @@ export async function startBot(botName, ownerNumber, sessionId) {
         activeBots.delete(botName);
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         if (statusCode === DisconnectReason.badSession || statusCode === DisconnectReason.loggedOut) {
-          await saveUserDetails(null, botName, ownerNumber, sessionId, "disconnected");
+          await saveUserDetails(pool, botName, ownerNumber, sessionId, "disconnected");
+          await pool.query("DELETE FROM sessions WHERE botName = $1", [botName]);
         } else {
-          startBot(botName, ownerNumber, sessionId);
+          startBot(pool, botName, ownerNumber, sessionId);
         }
       } else if (connection === "open") {
-        await saveUserDetails(null, botName, ownerNumber, sessionId, "connected");
+        await saveUserDetails(pool, botName, ownerNumber, sessionId, "connected");
         await conn.sendMessage(conn.user.id, {
           text: "◈━━━━━━━━━━━━━━━━◈\n│❒ Bot connected successfully ✅\n◈━━━━━━━━━━━━━━━━◈",
         });
       }
     });
 
-    conn.ev.on("creds.update", saveCreds);
+    conn.ev.on("creds.update", async () => {
+      state.creds = conn.authState.creds;
+      state.keys = conn.authState.keys;
+      await saveCreds();
+    });
 
     conn.ev.on("messages.upsert", async (chatUpdate) => {
       const mek = chatUpdate.messages[0];
@@ -77,9 +82,20 @@ export async function startBot(botName, ownerNumber, sessionId) {
     });
 
     conn.public = true; // Multi-device support
+
+    // Initialize session from sessionId
+    if (!credsResult.rows[0]) {
+      try {
+        const credsBuffer = Buffer.from(sessionId, "base64");
+        state.creds = JSON.parse(credsBuffer.toString());
+        await saveCreds();
+      } catch {
+        throw new Error("Invalid session ID");
+      }
+    }
   } catch (error) {
     activeBots.delete(botName);
-    await saveUserDetails(null, botName, ownerNumber, sessionId, "error");
+    await saveUserDetails(pool, botName, ownerNumber, sessionId, "error");
     throw error;
   }
 }
@@ -91,16 +107,5 @@ export async function stopBot(botName) {
       await conn.end();
     } catch {}
     activeBots.delete(botName);
-  }
-}
-
-async function loadBase64Session(sessionId, botName) {
-  const credsPath = path.join(sessionDir, `creds_${botName}.json`);
-  try {
-    const credsBuffer = Buffer.from(sessionId, "base64");
-    await fs.writeFile(credsPath, credsBuffer);
-    return true;
-  } catch {
-    return false;
   }
 }
