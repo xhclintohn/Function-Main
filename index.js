@@ -7,6 +7,7 @@ import { saveUserDetails, getAllUsers, deleteUser, deleteAllUsers, cleanupOldBot
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MAX_BOTS = 50;
+const ADMIN_PASSWORD = "toxicadmin2025";
 
 // Enable proxy for Heroku
 app.set("trust proxy", 1);
@@ -20,6 +21,15 @@ app.use(
   "/api/connect",
   rateLimit({ windowMs: 15 * 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false })
 );
+
+// Admin auth middleware
+const adminAuth = (req, res, next) => {
+  const { password } = req.body;
+  if (!password || password !== ADMIN_PASSWORD) {
+    return res.status(401).json({ error: "Invalid admin password" });
+  }
+  next();
+};
 
 // Start cleanup task (hourly)
 setInterval(() => cleanupOldBots().catch((err) => console.error("Cleanup failed:", err)), 60 * 60 * 1000);
@@ -56,7 +66,7 @@ app.post("/api/connect", async (req, res) => {
 
     await saveUserDetails(botName, ownerNumber, sessionId, "connecting");
     await startBot(botName, ownerNumber, sessionId);
-    res.json({ message: `Bot ${botName} is being connected` });
+    res.json({ message: `Bot ${botName} is being connected`, botName });
   } catch (error) {
     await deleteUser(botName);
     res.status(500).json({ error: `Failed to start bot: ${error.message}` });
@@ -72,7 +82,7 @@ app.get("/api/users", async (req, res) => {
   }
 });
 
-app.post("/api/delete", async (req, res) => {
+app.post("/api/admin/delete", adminAuth, async (req, res) => {
   const { botName } = req.body;
   if (!botName) {
     return res.status(400).json({ error: "Bot name required" });
@@ -86,7 +96,7 @@ app.post("/api/delete", async (req, res) => {
   }
 });
 
-app.post("/api/delete-all", async (req, res) => {
+app.post("/api/admin/delete-all", adminAuth, async (req, res) => {
   try {
     const users = await getAllUsers();
     for (const user of users) {
