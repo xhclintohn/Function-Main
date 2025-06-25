@@ -12,11 +12,10 @@ const MAX_BOTS = 50;
 app.set("trust proxy", 1);
 
 // Find Postgres URL dynamically
-const postgresUrl =
-  process.env.DATABASE_URL ||
-  Object.keys(process.env)
-    .find((key) => key.startsWith("HEROKU_POSTGRESQL_") && key.endsWith("_URL"))
-    ?.map((key) => process.env[key])[0];
+const postgresKey = Object.keys(process.env).find(
+  (key) => key.startsWith("HEROKU_POSTGRESQL_") && key.endsWith("_URL")
+);
+const postgresUrl = process.env.DATABASE_URL || (postgresKey ? process.env[postgresKey] : null);
 if (!postgresUrl) {
   console.error("No PostgreSQL URL found in environment variables!");
   process.exit(1);
