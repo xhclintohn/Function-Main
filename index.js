@@ -8,13 +8,24 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const MAX_BOTS = 50;
 
-// Enable proxy support for Heroku
+// Enable proxy for Heroku
 app.set("trust proxy", 1);
+
+// Find Postgres URL dynamically
+const postgresUrl =
+  process.env.DATABASE_URL ||
+  Object.keys(process.env)
+    .find((key) => key.startsWith("HEROKU_POSTGRESQL_") && key.endsWith("_URL"))
+    ?.map(key => process.env[key])[0];
+if (!postgresUrl) {
+  console.error("No PostgreSQL URL found in environment variables!");
+  process.exit(1);
+}
 
 // Postgres client
 const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL || "postgres://localhost:5432/toxicbot",
-  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
+  connectionString: postgresUrl,
+  ssl: postgresUrl.includes("localhost") ? {} : { rejectUnauthorized: false },
 });
 
 // Middleware
@@ -24,7 +35,7 @@ app.use(
   rateLimit({ windowMs: 15 * 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false })
 );
 
-// Initialize Postgres tables
+// Initialize PostgreSQL tables
 async function initDb() {
   try {
     await pool.query(`
@@ -32,25 +43,25 @@ async function initDb() {
         botName TEXT PRIMARY KEY,
         ownerNumber TEXT NOT NULL,
         sessionId TEXT NOT NULL,
-        status TEXT NOT NULL,
+        status TEXT,
         connectedAt TIMESTAMP NOT NULL
       );
     `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS sessions (
         botName TEXT PRIMARY KEY,
-        creds JSONB NOT NULL
+        creds TEXT NOT NULL
       );
     `);
-    console.log("Database initialized successfully");
+    console.log("PostgreSQL initialized successfully");
   } catch (error) {
     console.error("Database initialization failed:", error.message);
     throw error;
   }
 }
-initDb().catch((err) => console.error("Failed to initialize database:", err));
+initDb().catch((err) => console.error("Database init failed:", err));
 
-// Start cleanup task (every hour)
+// Start cleanup task (hourly)
 setInterval(() => cleanupOldBots(pool).catch((err) => console.error("Cleanup failed:", err)), 60 * 60 * 1000);
 
 // APIs
@@ -60,13 +71,13 @@ app.post("/api/connect", async (req, res) => {
     return res.status(400).json({ error: "Missing required fields" });
   }
   if (!ownerNumber.match(/^\+\d{10,15}$/)) {
-    return res.status(400).json({ error: "Invalid owner number format (e.g., +254735342808)" });
+    return res.status(400).json({ error: "Invalid owner number format (e.g., +255735342912)" });
   }
 
   try {
     const existing = await pool.query("SELECT botName FROM users WHERE botName = $1", [botName]);
     if (existing.rows.length > 0) {
-      return res.status(400).json({ error: "Bot name already in use" });
+      return res.status(400).json({ error: "Bot name already exists" });
     }
 
     const users = await getAllUsers(pool);
@@ -102,7 +113,7 @@ app.post("/api/delete", async (req, res) => {
     await deleteUser(pool, botName);
     res.json({ message: `Bot ${botName} deleted` });
   } catch (error) {
-    res.status(500).json({ error: "Failed to delete bot" });
+    res.status(500).json({ error: Failed to delete bot" });
   }
 });
 
