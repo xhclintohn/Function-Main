@@ -15,22 +15,41 @@ export async function startBot(pool, botName, ownerNumber, sessionId) {
   if (activeBots.has(botName)) return;
 
   try {
+    // Validate sessionId
+    if (!sessionId || typeof sessionId !== "string" || sessionId.length < 8) {
+      throw new Error("Invalid session ID: must be a non-empty Base64 string");
+    }
+
     // Load or initialize session
     const { version } = await fetchLatestBaileysVersion();
     const credsResult = await pool.query("SELECT creds FROM sessions WHERE botName = $1", [botName]);
-    let state = credsResult.rows[0]?.creds ? JSON.parse(credsResult.rows[0].creds) : { creds: {}, keys: {} };
+    let state = { creds: {}, keys: {} };
+
+    if (credsResult.rows[0]?.creds) {
+      try {
+        state = JSON.parse(credsResult.rows[0].creds);
+        if (!state.creds || !state.keys) {
+          console.warn(`Invalid creds format for ${botName}, resetting state`);
+          state = { creds: {}, keys: {} };
+        }
+      } catch (error) {
+        console.error(`Failed to parse creds for ${botName}: ${error.message}`);
+        state = { creds: {}, keys: {} };
+      }
+    }
 
     const saveCreds = async () => {
       try {
+        const credsJson = JSON.stringify(state);
         await pool.query(
           `INSERT INTO sessions (botName, creds)
            VALUES ($1, $2)
            ON CONFLICT (botName) DO UPDATE
            SET creds = $2`,
-          [botName, JSON.stringify(state)]
+          [botName, credsJson]
         );
       } catch (error) {
-        console.error(`Failed to save creds for ${botName}:`, error.message);
+        console.error(`Failed to save creds for ${botName}: ${error.message}`);
       }
     };
 
@@ -91,10 +110,11 @@ export async function startBot(pool, botName, ownerNumber, sessionId) {
     if (!credsResult.rows[0]) {
       try {
         const credsBuffer = Buffer.from(sessionId, "base64");
-        state.creds = JSON.parse(credsBuffer.toString());
+        const credsJson = credsBuffer.toString();
+        state.creds = JSON.parse(credsJson);
         await saveCreds();
       } catch (error) {
-        console.error(`Invalid session ID for ${botName}:`, error.message);
+        console.error(`Invalid session ID for ${botName}: ${error.message}`);
         throw new Error("Invalid session ID");
       }
     }
