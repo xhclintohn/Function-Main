@@ -1,13 +1,3 @@
-import fs from "fs/promises";
-import path from "path";
-import { fileURLToPath } from "url";
-import { stopBot } from "./bot.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const sessionDir = path.join(__dirname, "session");
-
-await fs.mkdir(sessionDir, { recursive: true });
-
 export async function saveUserDetails(pool, botName, ownerNumber, sessionId, status = "disconnected") {
   await pool.query(
     `INSERT INTO users (botName, ownerNumber, sessionId, status, connectedAt)
@@ -25,14 +15,7 @@ export async function getAllUsers(pool) {
 
 export async function deleteUser(pool, botName) {
   await pool.query("DELETE FROM users WHERE botName = $1", [botName]);
-  const sessionFolder = path.join(sessionDir, `session_${botName}`);
-  const credsFile = path.join(sessionDir, `creds_${botName}.json`);
-  try {
-    await fs.rm(sessionFolder, { recursive: true });
-  } catch {}
-  try {
-    await fs.unlink(credsFile);
-  } catch {}
+  await pool.query("DELETE FROM sessions WHERE botName = $1", [botName]);
 }
 
 export async function deleteAllUsers(pool) {
