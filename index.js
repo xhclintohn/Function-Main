@@ -8,17 +8,23 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const MAX_BOTS = 50;
 
+// Enable proxy support for Heroku
+app.set("trust proxy", 1);
+
 // Postgres client
 const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
+  connectionString: process.env.DATABASE_URL || "postgres://localhost:5432/toxicbot",
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
 });
 
 // Middleware
 app.use(express.json());
-app.use("/api/connect", rateLimit({ windowMs: 15 * 60 * 1000, max: 5 })); // 5 requests/15 min/IP
+app.use(
+  "/api/connect",
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false })
+);
 
-// Initialize Postgres table
+// Initialize Postgres tables
 async function initDb() {
   try {
     await pool.query(`
@@ -30,15 +36,22 @@ async function initDb() {
         connectedAt TIMESTAMP NOT NULL
       );
     `);
-    console.log("Database initialized");
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        botName TEXT PRIMARY KEY,
+        creds JSONB NOT NULL
+      );
+    `);
+    console.log("Database initialized successfully");
   } catch (error) {
-    console.error("Database initialization failed:", error);
+    console.error("Database initialization failed:", error.message);
+    throw error;
   }
 }
-initDb();
+initDb().catch((err) => console.error("Failed to initialize database:", err));
 
 // Start cleanup task (every hour)
-setInterval(() => cleanupOldBots(pool), 60 * 60 * 1000);
+setInterval(() => cleanupOldBots(pool).catch((err) => console.error("Cleanup failed:", err)), 60 * 60 * 1000);
 
 // APIs
 app.post("/api/connect", async (req, res) => {
@@ -50,29 +63,33 @@ app.post("/api/connect", async (req, res) => {
     return res.status(400).json({ error: "Invalid owner number format (e.g., +254735342808)" });
   }
 
-  const existing = await pool.query("SELECT botName FROM users WHERE botName = $1", [botName]);
-  if (existing.rows.length > 0) {
-    return res.status(400).json({ error: "Bot name already in use" });
-  }
-
-  const users = await getAllUsers(pool);
-  if (users.length >= MAX_BOTS) {
-    return res.status(429).json({ error: "Maximum bot limit reached" });
-  }
-
-  await saveUserDetails(pool, botName, ownerNumber, sessionId, "connecting");
   try {
+    const existing = await pool.query("SELECT botName FROM users WHERE botName = $1", [botName]);
+    if (existing.rows.length > 0) {
+      return res.status(400).json({ error: "Bot name already in use" });
+    }
+
+    const users = await getAllUsers(pool);
+    if (users.length >= MAX_BOTS) {
+      return res.status(429).json({ error: "Maximum bot limit reached" });
+    }
+
+    await saveUserDetails(pool, botName, ownerNumber, sessionId, "connecting");
     await startBot(pool, botName, ownerNumber, sessionId);
     res.json({ message: `Bot ${botName} is being connected` });
   } catch (error) {
     await deleteUser(pool, botName);
-    res.status(500).json({ error: "Failed to start bot" });
+    res.status(500).json({ error: `Failed to start bot: ${error.message}` });
   }
 });
 
 app.get("/api/users", async (req, res) => {
-  const users = await getAllUsers(pool);
-  res.json(users);
+  try {
+    const users = await getAllUsers(pool);
+    res.json(users);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch users" });
+  }
 });
 
 app.post("/api/delete", async (req, res) => {
@@ -80,18 +97,26 @@ app.post("/api/delete", async (req, res) => {
   if (!botName) {
     return res.status(400).json({ error: "Bot name required" });
   }
-  await stopBot(botName);
-  await deleteUser(pool, botName);
-  res.json({ message: `Bot ${botName} deleted` });
+  try {
+    await stopBot(botName);
+    await deleteUser(pool, botName);
+    res.json({ message: `Bot ${botName} deleted` });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to delete bot" });
+  }
 });
 
 app.post("/api/delete-all", async (req, res) => {
-  const users = await getAllUsers(pool);
-  for (const user of users) {
-    await stopBot(user.botName);
-    await deleteUser(pool, user.botName);
+  try {
+    const users = await getAllUsers(pool);
+    for (const user of users) {
+      await stopBot(user.botName);
+      await deleteUser(pool, user.botName);
+    }
+    res.json({ message: "All bots deleted" });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to delete all bots" });
   }
-  res.json({ message: "All bots deleted" });
 });
 
 app.get("/", (req, res) => res.send("Toxic Bot Hosting server is running!"));
