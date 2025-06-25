@@ -1,38 +1,85 @@
-export async function saveUserDetails(pool, botName, ownerNumber, sessionId, status = "disconnected") {
-  await pool.query(
-    `INSERT INTO users (botName, ownerNumber, sessionId, status, connectedAt)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (botName) DO UPDATE
-     SET ownerNumber = $2, sessionId = $3, status = $4, connectedAt = $5`,
-    [botName, ownerNumber, sessionId, status, new Date().toISOString()]
-  );
-}
+import fs from "fs/promises";
+import path from "path";
 
-export async function getAllUsers(pool) {
-  const result = await pool.query("SELECT * FROM users");
-  return result.rows;
-}
+const BOTS_DIR = path.join(process.cwd(), "bots");
 
-export async function deleteUser(pool, botName) {
-  await pool.query("DELETE FROM users WHERE botName = $1", [botName]);
-  await pool.query("DELETE FROM sessions WHERE botName = $1", [botName]);
-}
-
-export async function deleteAllUsers(pool) {
-  const users = await getAllUsers(pool);
-  for (const user of users) {
-    await stopBot(user.botName);
-    await deleteUser(pool, user.botName);
+export async function saveUserDetails(botName, ownerNumber, sessionId, status) {
+  try {
+    const userPath = path.join(BOTS_DIR, botName, "user.json");
+    await fs.mkdir(path.dirname(userPath), { recursive: true });
+    const userData = {
+      botName,
+      ownerNumber,
+      sessionId,
+      status,
+      connectedAt: new Date().toISOString(),
+    };
+    await fs.writeFile(userPath, JSON.stringify(userData, null, 2));
+  } catch (error) {
+    console.error(`Failed to save user details for ${botName}: ${error.message}`);
+    throw error;
   }
 }
 
-export async function cleanupOldBots(pool) {
-  const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
-  const users = await getAllUsers(pool);
-  for (const user of users) {
-    if (Date.now() - new Date(user.connectedAt).getTime() > THREE_DAYS_MS) {
-      await stopBot(user.botName);
-      await deleteUser(pool, user.botName);
+export async function getAllUsers() {
+  try {
+    await fs.mkdir(BOTS_DIR, { recursive: true });
+    const botDirs = await fs.readdir(BOTS_DIR, { withFileTypes: true });
+    const users = [];
+    for (const dir of botDirs) {
+      if (dir.isDirectory()) {
+        const userPath = path.join(BOTS_DIR, dir.name, "user.json");
+        try {
+          const userData = await fs.readFile(userPath, "utf8");
+          users.push(JSON.parse(userData));
+        } catch (error) {
+          if (error.code !== "ENOENT") {
+            console.error(`Failed to read user data for ${dir.name}: ${error.message}`);
+          }
+        }
+      }
     }
+    return users;
+  } catch (error) {
+    console.error("Failed to get all users:", error.message);
+    return [];
+  }
+}
+
+export async function deleteUser(botName) {
+  try {
+    const botDir = path.join(BOTS_DIR, botName);
+    await fs.rm(botDir, { recursive: true, force: true });
+  } catch (error) {
+    console.error(`Failed to delete user ${botName}: ${error.message}`);
+    throw error;
+  }
+}
+
+export async function deleteAllUsers() {
+  try {
+    const users = await getAllUsers();
+    for (const user of users) {
+      await deleteUser(user.botName);
+    }
+  } catch (error) {
+    console.error("Failed to delete all users:", error.message);
+    throw error;
+  }
+}
+
+export async function cleanupOldBots() {
+  try {
+    const users = await getAllUsers();
+    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    for (const user of users) {
+      const connectedAt = new Date(user.connectedAt);
+      if (connectedAt < threeDaysAgo) {
+        await deleteUser(user.botName);
+        console.log(`Cleaned up old bot: ${user.botName}`);
+      }
+    }
+  } catch (error) {
+    console.error("Failed to cleanup old bots:", error.message);
   }
 }
