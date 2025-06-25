@@ -13,12 +13,11 @@ const logger = pino({ level: "silent" });
 const msgRetryCounterCache = new NodeCache();
 const activeBots = new Map();
 const failedBots = new Set();
-
 const BOTS_DIR = path.join(process.cwd(), "bots");
 
 async function loadBase64Session(botName, sessionId) {
   if (!sessionId || sessionId === "Your Session Id") {
-    throw new Error("Invalid or missing SESSION_ID");
+    throw new Error(`◈━━━━━━━━━━━━━━━━◈\n│❒ Invalid or missing SESSION_ID\n◈━━━━━━━━━━━━━━━━◈`);
   }
 
   const credsPath = path.join(BOTS_DIR, botName, "session", "creds.json");
@@ -28,7 +27,7 @@ async function loadBase64Session(botName, sessionId) {
     await fs.writeFile(credsPath, credsBuffer);
     return true;
   } catch (error) {
-    throw new Error(`Failed to load SESSION_ID: ${error.message}`);
+    throw new Error(`◈━━━━━━━━━━━━━━━━◈\n│❒ Failed to load SESSION_ID: ${error.message}\n◈━━━━━━━━━━━━━━━━◈`);
   }
 }
 
@@ -49,7 +48,7 @@ export async function startBot(botName, ownerNumber, sessionId) {
     try {
       const credsData = await fs.readFile(credsPath, "utf8");
       state.creds = JSON.parse(credsData);
-      if (!state.creds.clientID || !state.creds.serverToken) {
+      if (!state.creds.me?.id || !state.creds.deviceId) {
         console.warn(`Invalid creds format for ${botName}, resetting state`);
         state = { creds: {}, keys: {} };
       }
@@ -132,17 +131,17 @@ export async function startBot(botName, ownerNumber, sessionId) {
 
     // Initialize session from sessionId
     try {
-      const credsBuffer = Buffer.from(sessionId, "base64");
-      const credsJson = credsBuffer.toString();
-      state.creds = JSON.parse(credsJson);
-      if (!state.creds.clientID || !state.creds.serverToken) {
-        throw new Error("Invalid session ID: missing required fields");
+      await loadBase64Session(botName, sessionId);
+      const credsData = await fs.readFile(credsPath, "utf8");
+      state.creds = JSON.parse(credsData);
+      if (!state.creds.me?.id || !state.creds.deviceId) {
+        throw new Error("Invalid session ID: missing required fields (me.id, deviceId)");
       }
       await saveCreds();
     } catch (error) {
       console.error(`Invalid session ID for ${botName}: ${error.message}`);
       failedBots.add(botName);
-      throw new Error("Invalid session ID");
+      throw error;
     }
   } catch (error) {
     activeBots.delete(botName);
