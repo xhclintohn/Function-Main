@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "baileys-pro": "latest",
     "express": "^4.18.2",
     "pino": "^8.15.0",
     "node-cache": "^5.1.2",
